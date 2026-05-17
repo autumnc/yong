@@ -18,17 +18,18 @@ typedef struct{
 	bool wait;
 }YONG_ASYNC;
 
-typedef struct{
-	LList;
-	void (*run)(void*);
-	LFreeFunc free;
+typedef struct _ASYNC_TASK{
+    struct _ASYNC_TASK *prev;  /* LList 的实际成员 */
+    struct _ASYNC_TASK *next;  /* LList 的实际成员 */
+    void (*run)(void*);
+    LFreeFunc free;
 }ASYNC_TASK;
 
 typedef struct{
-	ASYNC_TASK;
-	char *file;
-	LString *data;
-	bool backup;
+    ASYNC_TASK task;           /* 显式包含 ASYNC_TASK 作为成员 */
+    char *file;
+    LString *data;
+    bool backup;
 }ASYNC_TASK_WRITE_FILE;
 
 static YONG_ASYNC async;
@@ -94,7 +95,7 @@ static void async_task_add(ASYNC_TASK *t)
 		l_thrd_join(async.th,NULL);
 		async.wait=false;
 	}
-	l_queue_push_tail(async.que,t);
+	l_queue_push_tail(async.que, t);
 	if(!async.run)
 	{
 		async.run=true;
@@ -138,12 +139,12 @@ int y_im_async_write_file(const char *file,LString *data,bool backup)
 		l_string_free(data);
 		return -1;
 	}
-	ASYNC_TASK_WRITE_FILE *t=l_new(ASYNC_TASK_WRITE_FILE);
+	ASYNC_TASK_WRITE_FILE *t = l_new0(ASYNC_TASK_WRITE_FILE);
 	t->file=l_strdup(file);
 	t->data=data;
 	t->backup=backup;
-	t->free=(void*)async_task_write_file_free;
-	t->run=(void*)async_task_write_file_run;
+	t->task.free=(void*)async_task_write_file_free;
+	t->task.run=(void*)async_task_write_file_run;
 	async_task_add((ASYNC_TASK*)t);
 	return 0;
 }

@@ -758,7 +758,8 @@ char *GetStatusPos(void)
 	return l_sprintf("%d,%d",x,y);
 }
 #else
-#include <glib.h>
+#include <glib-2.0/glib.h>
+#include <glib-2.0/glib/galloca.h>
 char *GetStatusPos(void)
 {
 	gchar *out=NULL;

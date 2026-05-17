@@ -1,0 +1,357 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/Xatom.h>
+#include <time.h>
+
+typedef struct {
+    int state;          /* 输入法开关状态 */
+    int lang;           /* 0=中文, 1=英文 */
+    int corner;         /* 0=半角, 1=全角 */
+    int biaodian;       /* 0=中文标点, 1=英文标点 */
+    int trad;           /* 0=简体, 1=繁体 */
+    char im_name[64];
+    char server_name[128];
+    int64_t timestamp;
+} IMEStatus;
+
+static IMEStatus current_status = {0};
+static int output_format = 0;
+static Display *dpy = NULL;
+
+static int64_t get_timestamp_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* 获取所有XIM相关属性 */
+static void query_x11_attributes(void)
+{
+    Window root;
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    Atom atom;
+    
+    if (!dpy) return;
+    
+    root = DefaultRootWindow(dpy);
+    
+    /* 获取XIM服务器名称 */
+    atom = XInternAtom(dpy, "XIM_SERVER", True);
+    if (atom != None) {
+        if (XGetWindowProperty(dpy, root, atom, 0, 1024, False,
+                              XA_STRING, &actual_type, &actual_format,
+                              &nitems, &bytes_after, &data) == Success) {
+            if (data && nitems > 0) {
+                strncpy(current_status.server_name, (char*)data, sizeof(current_status.server_name) - 1);
+                XFree(data);
+            }
+        }
+    }
+    
+    /* 获取输入法状态 */
+    atom = XInternAtom(dpy, "_XIM_STATUS", True);
+    if (atom != None) {
+        if (XGetWindowProperty(dpy, root, atom, 0, 1024, False,
+                              XA_STRING, &actual_type, &actual_format,
+                              &nitems, &bytes_after, &data) == Success) {
+            if (data && nitems > 0) {
+                char *status = (char*)data;
+                /* 解析状态字符串 */
+                if (strstr(status, "ON") || strstr(status, "on") || strstr(status, "1")) {
+                    current_status.state = 1;
+                } else if (strstr(status, "OFF") || strstr(status, "off") || strstr(status, "0")) {
+                    current_status.state = 0;
+                }
+                /* 尝试提取更多信息 */
+                if (strstr(status, "Chinese")) current_status.lang = 0;
+                if (strstr(status, "English")) current_status.lang = 1;
+                if (strstr(status, "Full")) current_status.corner = 1;
+                if (strstr(status, "Half")) current_status.corner = 0;
+                XFree(data);
+            }
+        }
+    }
+    
+    /* 获取XIM输入法名称 */
+    atom = XInternAtom(dpy, "_XIM_INPUT_METHOD", True);
+    if (atom != None) {
+        if (XGetWindowProperty(dpy, root, atom, 0, 1024, False,
+                              XA_STRING, &actual_type, &actual_format,
+                              &nitems, &bytes_after, &data) == Success) {
+            if (data && nitems > 0) {
+                strncpy(current_status.im_name, (char*)data, sizeof(current_status.im_name) - 1);
+                XFree(data);
+            }
+        }
+    }
+}
+
+/* 通过客户端消息获取状态 */
+static void query_client_messages(void)
+{
+    Window root, focus_win;
+    int revert;
+    Atom atom;
+    unsigned char *data = NULL;
+    unsigned long nitems;
+    int actual_format;
+    Atom actual_type;
+    
+    if (!dpy) return;
+    
+    root = DefaultRootWindow(dpy);
+    
+    /* 获取当前焦点窗口 */
+    XGetInputFocus(dpy, &focus_win, &revert);
+    if (focus_win != None) {
+        /* 尝试获取窗口的输入法相关属性 */
+        atom = XInternAtom(dpy, "XIM_STATUS", True);
+        if (atom != None) {
+            if (XGetWindowProperty(dpy, focus_win, atom, 0, 1024, False,
+                                  XA_STRING, &actual_type, &actual_format,
+                                  &nitems, &bytes_after, &data) == Success) {
+                if (data && nitems > 0) {
+                    XFree(data);
+                }
+            }
+        }
+    }
+}
+
+/* 通过配置文件获取状态（备选） */
+static void get_status_from_config(void)
+{
+    FILE *fp;
+    char line[256];
+    char config_path[512];
+    const char *home = getenv("HOME");
+    
+    if (!home) return;
+    
+    /* 尝试多个可能的配置文件路径 */
+    const char *config_files[] = {
+        "/.config/yong/yong.ini",
+        "/.yong/yong.ini",
+        "/.config/fcitx/config",
+        "/.config/fcitx5/config",
+        "/.config/ibus/bus",
+        NULL
+    };
+    
+    for (int i = 0; config_files[i]; i++) {
+        snprintf(config_path, sizeof(config_path), "%s%s", home, config_files[i]);
+        fp = fopen(config_path, "r");
+        if (fp) {
+            while (fgets(line, sizeof(line), fp)) {
+                if (strstr(line, "DefaultIM=")) {
+                    char *p = strchr(line, '=');
+                    if (p) {
+                        p++;
+                        char *end = strchr(p, '\n');
+                        if (end) *end = '\0';
+                        strncpy(current_status.im_name, p, sizeof(current_status.im_name) - 1);
+                    }
+                }
+            }
+            fclose(fp);
+            break;
+        }
+    }
+}
+
+/* 通过进程信息获取状态 */
+static void get_status_from_process(void)
+{
+    FILE *fp;
+    char line[256];
+    char cmd[256];
+    char pid_str[32];
+    
+    /* 查找yong进程 */
+    fp = popen("pgrep -x yong 2>/dev/null | head -1", "r");
+    if (fp) {
+        if (fgets(pid_str, sizeof(pid_str), fp)) {
+            pid_str[strcspn(pid_str, "\n")] = 0;
+            if (pid_str[0]) {
+                /* 读取进程命令行 */
+                snprintf(cmd, sizeof(cmd), "cat /proc/%s/cmdline 2>/dev/null | tr '\\0' ' '", pid_str);
+                FILE *fp2 = popen(cmd, "r");
+                if (fp2) {
+                    if (fgets(line, sizeof(line), fp2)) {
+                        if (strstr(line, "yong")) {
+                            current_status.state = 1;  // 进程存在说明可能正在运行
+                        }
+                    }
+                    pclose(fp2);
+                }
+            }
+        }
+        pclose(fp);
+    }
+}
+
+/* 输出状态 */
+static void output_status(void)
+{
+    const char *state_str = current_status.state ? "enabled" : "disabled";
+    const char *lang_str = current_status.lang ? "en" : "zh";
+    const char *lang_display = current_status.lang ? "英文" : "中文";
+    const char *corner_str = current_status.corner ? "full" : "half";
+    const char *corner_display = current_status.corner ? "全角" : "半角";
+    const char *bd_str = current_status.biaodian ? "en" : "zh";
+    const char *bd_display = current_status.biaodian ? "英文标点" : "中文标点";
+    const char *trad_str = current_status.trad ? "trad" : "simp";
+    const char *trad_display = current_status.trad ? "繁体" : "简体";
+    
+    switch (output_format) {
+        case 0:
+            printf("{\n");
+            printf("  \"timestamp\": %ld,\n", (long)current_status.timestamp);
+            printf("  \"state\": %d,\n", current_status.state);
+            printf("  \"state_text\": \"%s\",\n", state_str);
+            printf("  \"lang\": %d,\n", current_status.lang);
+            printf("  \"lang_text\": \"%s\",\n", lang_str);
+            printf("  \"lang_display\": \"%s\",\n", lang_display);
+            printf("  \"corner\": %d,\n", current_status.corner);
+            printf("  \"corner_text\": \"%s\",\n", corner_str);
+            printf("  \"corner_display\": \"%s\",\n", corner_display);
+            printf("  \"biaodian\": %d,\n", current_status.biaodian);
+            printf("  \"biaodian_text\": \"%s\",\n", bd_str);
+            printf("  \"biaodian_display\": \"%s\",\n", bd_display);
+            printf("  \"trad\": %d,\n", current_status.trad);
+            printf("  \"trad_text\": \"%s\",\n", trad_str);
+            printf("  \"trad_display\": \"%s\",\n", trad_display);
+            printf("  \"im_name\": \"%s\",\n", current_status.im_name);
+            printf("  \"xim_server\": \"%s\"\n", current_status.server_name);
+            printf("}\n");
+            break;
+        case 1:
+            printf("%s|%s|%s|%s|%s|%s\n", 
+                   state_str, lang_str, corner_str, bd_str, trad_str, 
+                   current_status.im_name[0] ? current_status.im_name : "unknown");
+            break;
+        case 2:
+            printf("[%s] XIM:%s 状态:%s 语言:%s 符号:%s 标点:%s 繁简:%s\n",
+                   current_status.im_name[0] ? current_status.im_name : "unknown",
+                   current_status.server_name,
+                   state_str, lang_display, corner_display, bd_display, 
+                   trad_display);
+            break;
+    }
+    fflush(stdout);
+}
+
+/* 主动查询所有状态 */
+static void update_status(void)
+{
+    memset(&current_status, 0, sizeof(current_status));
+    
+    /* 通过X11查询 */
+    query_x11_attributes();
+    query_client_messages();
+    
+    /* 如果X11没有获取到，尝试其他方法 */
+    if (current_status.im_name[0] == '\0') {
+        get_status_from_config();
+    }
+    
+    get_status_from_process();
+    
+    current_status.timestamp = get_timestamp_ms();
+}
+
+/* 列出所有XIM相关属性（调试用） */
+static void list_xim_atoms(void)
+{
+    Atom *atoms;
+    int atom_count;
+    char *atom_name;
+    
+    if (!dpy) return;
+    
+    printf("Listing all XIM-related atoms:\n");
+    atoms = XListProperties(dpy, DefaultRootWindow(dpy), &atom_count);
+    if (atoms) {
+        for (int i = 0; i < atom_count; i++) {
+            atom_name = XGetAtomName(dpy, atoms[i]);
+            if (atom_name && (strstr(atom_name, "XIM") || strstr(atom_name, "IM") || 
+                             strstr(atom_name, "INPUT") || strstr(atom_name, "YONG"))) {
+                printf("  %s\n", atom_name);
+            }
+            if (atom_name) XFree(atom_name);
+        }
+        XFree(atoms);
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    int interval = 1;
+    int once = 0;
+    int list = 0;
+    int opt;
+    
+    while ((opt = getopt(argc, argv, "i:of:hl")) != -1) {
+        switch (opt) {
+            case 'i':
+                interval = atoi(optarg);
+                if (interval <= 0) interval = 1;
+                break;
+            case 'o':
+                once = 1;
+                break;
+            case 'f':
+                output_format = atoi(optarg);
+                break;
+            case 'l':
+                list = 1;
+                break;
+            case 'h':
+                printf("Usage: %s [OPTIONS]\n", argv[0]);
+                printf("Monitor IME status via X11/XIM\n\n");
+                printf("Options:\n");
+                printf("  -i INTERVAL   Polling interval (default: 1)\n");
+                printf("  -o            Output once and exit\n");
+                printf("  -f FORMAT     0=JSON, 1=simple, 2=verbose\n");
+                printf("  -l            List XIM-related atoms\n");
+                printf("  -h            Show help\n");
+                return 0;
+        }
+    }
+    
+    /* 打开X显示连接 */
+    dpy = XOpenDisplay(NULL);
+    if (!dpy) {
+        fprintf(stderr, "Cannot open X display. Make sure X is running.\n");
+        return 1;
+    }
+    
+    if (list) {
+        list_xim_atoms();
+        XCloseDisplay(dpy);
+        return 0;
+    }
+    
+    if (once) {
+        update_status();
+        output_status();
+    } else {
+        fprintf(stderr, "Monitoring IME status via X11/XIM... (Ctrl+C to exit)\n");
+        while (1) {
+            update_status();
+            output_status();
+            sleep(interval);
+        }
+    }
+    
+    XCloseDisplay(dpy);
+    return 0;
+}

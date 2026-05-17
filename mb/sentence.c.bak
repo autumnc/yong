@@ -21,7 +21,7 @@ typedef struct _code_index{
 }CODE_INDEX;
 
 typedef struct{
-	CSET_GROUP_BASE;
+	CSET_GROUP;
 	int code_len;
 	LPtrArray *array;
 }CSET_GROUP_SENTENCE;
@@ -302,13 +302,12 @@ int sentence_init(void)
 	sentence->file=l_strdup(file);
 	sentence->cand_index=L_HASH_TABLE_STRING(ITEM,cand,0);
 	sentence->que=l_queue_new((LFreeFunc)item_queue_free);
-    	sentence->cset.type = CSET_TYPE_SENTENCE;
-    	sentence->cset.get = (void*)cset_sentence_group_get;
-   	sentence->cset.free = (void*)cset_sentence_group_free;
-    	sentence->cset.array = l_ptr_array_new(10);
-    	sentence->cset.count = 0;
-    	sentence->cset.offset = 0;
-    	sentence->cset.next = NULL;
+	sentence->cset=(CSET_GROUP_SENTENCE){
+		.type=CSET_TYPE_SENTENCE,
+		.get=(void*)cset_sentence_group_get,
+		.free=(void*)cset_sentence_group_free,
+		.array=l_ptr_array_new(10)
+	};
 	ret=sentence_load();
 	sentence->dirty=0;
 	return ret;

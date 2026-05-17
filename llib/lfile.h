@@ -1,6 +1,7 @@
 #ifndef _LFILE_H_
 #define _LFILE_H_
 
+#include <stdbool.h>
 #include <time.h>
 
 FILE *l_file_vopen(const char *file,const char *mode,va_list ap,size_t *size);

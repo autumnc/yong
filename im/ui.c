@@ -99,6 +99,8 @@ static gboolean (*is_composited)(GtkWidget *widget);
 static bool clipboard_skip;
 static char clipboard_text[512];
 
+static int get_text_width(const char *s, UI_FONT layout, int *height);
+
 static void load_sound_system(void)
 {
 	my_gdk_window_beep=dlsym(NULL,"gdk_window_beep");
@@ -1096,7 +1098,6 @@ static int get_input_text_height(void)
 {
 	char temp[8];
 	int cy;
-	int get_text_width(const char *s,UI_FONT layout,int *height);
 	y_im_str_encode("²â",temp,0);
 	get_text_width(temp,InputTheme.layout,&cy);
 	return cy;

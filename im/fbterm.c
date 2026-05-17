@@ -12,6 +12,8 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include <cairo.h>
 #include <linux/fb.h>
@@ -225,6 +227,10 @@ static int process_key(int keyval,int modifiers,int down)
 	return FALSE;
 }
 
+/* Forward declarations for status file functions */
+static void write_status_file(void);
+static void delete_status_file(void);
+
 static gboolean fb_io_func(GIOChannel *src,GIOCondition cond,gpointer user)
 {
 	unsigned char data[512],*msg;
@@ -260,6 +266,7 @@ static gboolean fb_io_func(GIOChannel *src,GIOCondition cond,gpointer user)
 			YongSetLang(def_lang);
 			YongShowMain(1);
 			YongShowInput(1);
+			write_status_file();
 			break;
 		}
 		case Deactive:
@@ -274,6 +281,7 @@ static gboolean fb_io_func(GIOChannel *src,GIOCondition cond,gpointer user)
 				CurrentID->focus=0;
 				CurrentID=0;
 			}
+			write_status_file();
 			break;
 		}
 		case ShowUI:
@@ -426,6 +434,52 @@ static void connect_fbterm(char raw)
 	}
 }
 
+#define STATUS_FILE "/tmp/yong_status"
+
+static const char *im_names[] = {
+	"\xd3\xc0\xc2\xeb",   /* æ°¸ç  */
+	"\xce\xe5\xb1\xca",   /* äº”ç¬” */
+	"\xc1\xbd\xb7\xd6",   /* ä¸¤åˆ† */
+	"\xb6\xfe\xb1\xca",   /* äºŒç¬” */
+	"\xc4\xda\xc2\xeb",   /* å†…ç  */
+	"\xc6\xb4\xd2\xf4",   /* æ‹¼éŸ³ */
+};
+
+static int im_names_count(void)
+{
+	return sizeof(im_names) / sizeof(im_names[0]);
+}
+
+static void write_status_file(void)
+{
+	FILE *fp = fopen(STATUS_FILE, "w");
+	if (!fp) return;
+
+	if (CurrentID && CurrentID->state) {
+		/* Language display */
+		if (CurrentID->lang == LANG_CN) {
+			int idx = im.Index;
+			if (idx >= 0 && idx < im_names_count())
+				fprintf(fp, "%s", im_names[idx]);
+			else
+				fprintf(fp, "\xd6\xd0\xce\xc4");
+		} else {
+			fprintf(fp, "\xd3\xa2\xce\xc4");
+		}
+		/* Corner indicator */
+		fprintf(fp, "%s", CurrentID->corner == CORNER_FULL ? "\xa1\xf1" : "\xa1\xf0");
+	} else {
+		fprintf(fp, "\xd3\xa2\xce\xc4\xa1\xf0");
+	}
+	fprintf(fp, "\n");
+	fclose(fp);
+}
+
+static void delete_status_file(void)
+{
+	unlink(STATUS_FILE);
+}
+
 int xim_fbterm_init(void)
 {
 	connect_fbterm(1);
@@ -433,11 +487,14 @@ int xim_fbterm_init(void)
 	id.track=1;
 	id.trad=im.TradDef;
 	fb_debug("fbterm init done\n");
+
+	write_status_file();
 	return 0;
 }
 
 void xim_fbterm_destroy(void)
 {
+	delete_status_file();
 }
 
 CONNECT_ID *xim_fbterm_get_connect(void)
@@ -454,6 +511,7 @@ static void xim_fbterm_put_connect(CONNECT_ID *dummy)
 		id.biaodian=dummy->biaodian;
 		id.trad=dummy->trad;
 	}
+	write_status_file();
 }
 
 void xim_fbterm_enable(int enable)
@@ -1073,13 +1131,13 @@ static void main_expose(void)
 			continue;
 		switch(i){
 		case UI_BTN_CN:
-			y_im_str_encode("ÖÐ",text,0);
+			y_im_str_encode("ï¿½ï¿½",text,0);
 			break;
 		case UI_BTN_EN:
 			y_im_str_encode("Ó¢",text,0);
 			break;
 		case UI_BTN_QUAN:
-			y_im_str_encode("°ë",text,0);
+			y_im_str_encode("ï¿½ï¿½",text,0);
 			x+=step;
 			break;
 		case UI_BTN_BAN:
@@ -1087,7 +1145,7 @@ static void main_expose(void)
 			x+=step;
 			break;
 		case UI_BTN_CN_BIAODIAN:
-			y_im_str_encode("¡£",text,0);
+			y_im_str_encode("ï¿½ï¿½",text,0);
 			x+=step*2;
 			break;
 		case UI_BTN_EN_BIAODIAN:
@@ -1095,11 +1153,11 @@ static void main_expose(void)
 			x+=step*2;
 			break;
 		case UI_BTN_SIMP:
-			y_im_str_encode("¼ò",text,0);
+			y_im_str_encode("ï¿½ï¿½",text,0);
 			x+=step*3;
 			break;
 		case UI_BTN_TRAD:
-			y_im_str_encode("·±",text,0);
+			y_im_str_encode("ï¿½ï¿½",text,0);
 			x+=step*3;
 			break;
 		}

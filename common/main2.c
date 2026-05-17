@@ -81,6 +81,58 @@ uint8_t tip_main;
 
 static uint16_t assoc_hide;
 
+/* Status file path */
+#define STATUS_FILE "/tmp/yong_status"
+
+/* Status file update function */
+static void update_status_file(const char *lang, int corner)
+{
+    FILE *fp = fopen(STATUS_FILE, "w");
+    if (!fp)
+        return;
+    
+    /* Write language status */
+    if (lang && strcmp(lang, "¿¿") == 0)
+        fprintf(fp, "¿¿");
+    else if (lang && strcmp(lang, "¿¿") == 0)
+        fprintf(fp, "¿¿");
+    else
+        fprintf(fp, "¿¿");
+    
+    /* Write corner status */
+    if (corner == CORNER_FULL)
+        fprintf(fp, "¿");
+    else
+        fprintf(fp, "¿");
+    
+    fclose(fp);
+}
+
+/* Delete status file */
+static void delete_status_file(void)
+{
+    unlink(STATUS_FILE);
+}
+
+/* Get current language name */
+static const char* get_current_lang_name(CONNECT_ID *id)
+{
+    if (!id)
+        return "¿¿";
+    return (id->lang == LANG_CN) ? "¿¿" : "¿¿";
+}
+
+/* Update status from current state */
+static void update_status_from_current(void)
+{
+    CONNECT_ID *id = y_xim_get_connect();
+    const char *lang = get_current_lang_name(id);
+    int corner = (id && id->corner == CORNER_FULL) ? CORNER_FULL : CORNER_HALF;
+    update_status_file(lang, corner);
+    if (id)
+        y_xim_put_connect(id);
+}
+
 EXTRA_IM *YongCurrentIM(void)
 {
 	if(im.BihuaMode)
@@ -246,6 +298,9 @@ out:
 	y_xim_put_connect(id);
 	YongUpdateMain(id);
 	YongResetIM();
+	
+	/* Update status file after language change */
+	update_status_from_current();
 }
 
 void YongSetCorner(int corner)
@@ -259,6 +314,9 @@ void YongSetCorner(int corner)
 	y_xim_put_connect(id);
 	YongUpdateMain(id);
 	YongResetIM();
+	
+	/* Update status file after corner change */
+	update_status_from_current();
 }
 
 void YongSetBiaodian(int biaodian)
@@ -1151,7 +1209,10 @@ int YongSwitchIM(int id)
 	}
 	update_tray_icon();
 	YongUpdateMain(0);
-	y_xim_put_connect(y_xim_get_connect());
+	
+	/* Update status file after IM switch */
+	update_status_from_current();
+	
 	return 0;
 }
 
@@ -1313,7 +1374,7 @@ void YongShowMain(int show)
 			if(id && tip_main)
 			{
 				CaretUpdate=false;
-				y_ui_timer_add(100,ShowLangTipLater,id->lang==0?YT("ï¿½ï¿½ï¿½ï¿½"):YT("Ó¢ï¿½ï¿½"));
+				y_ui_timer_add(100,ShowLangTipLater,id->lang==0?YT("¿¿"):YT("¿¿"));
 			}
 		}
 #ifndef CFG_NO_KEYBOARD
@@ -1457,10 +1518,13 @@ int YongHotKey(int key)
 #ifdef _WIN32
 		if(MainNoShow && tip_main)
 		{
-			if(id->state) y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½ï¿½ë·¨"));
-			else y_ui_show_tip(YT("ï¿½Ø±ï¿½ï¿½ï¿½ï¿½ë·¨"));
+			if(id->state) y_ui_show_tip(YT("¿¿¿¿¿"));
+			else y_ui_show_tip(YT("¿¿¿¿¿"));
 		}
 #endif
+		/* Update status file after trigger state change */
+		update_status_from_current();
+		
 		return 1;
 	}
 	else if(key==key_cnen[0] || key==key_cnen[1])
@@ -1470,7 +1534,7 @@ int YongHotKey(int key)
 			int prev=id->lang;
 			YongSetLang(!id->lang);
 			if(prev!=id->lang && tip_main)
-				y_ui_show_tip(YT("ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->lang==LANG_CN?YT("ï¿½ï¿½ï¿½ï¿½"):YT("Ó¢ï¿½ï¿½")));
+				y_ui_show_tip(YT("¿¿¿¿%s"),(id->lang==LANG_CN?YT("¿¿"):YT("¿¿")));
 			return 1;
 		}
 	}
@@ -1480,7 +1544,7 @@ int YongHotKey(int key)
 		{
 			YongSetCorner(!id->corner);
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->corner==CORNER_FULL?YT("È«ï¿½ï¿½"):YT("ï¿½ï¿½ï¿½")));
+				y_ui_show_tip(YT("¿¿¿¿%s"),(id->corner==CORNER_FULL?YT("¿¿"):YT("¿¿")));
 			return 1;
 		}
 	}
@@ -1490,7 +1554,7 @@ int YongHotKey(int key)
 		{
 			YongSetBiaodian(!id->biaodian);
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->biaodian==LANG_CN?YT("ï¿½ï¿½ï¿½Ä±ï¿½ï¿½"):YT("Ó¢ï¿½Ä±ï¿½ï¿½")));
+				y_ui_show_tip(YT("¿¿¿¿%s"),(id->biaodian==LANG_CN?YT("¿¿¿¿"):YT("¿¿¿¿")));
 			return 1;
 		}
 	}
@@ -1500,9 +1564,9 @@ int YongHotKey(int key)
 		{
 			const char *temp;
 			YongSetTrad(!id->trad);
-			temp=(id->trad==0?YT("ï¿½ï¿½ï¿½ï¿½"):YT("ï¿½ï¿½ï¿½ï¿½"));
+			temp=(id->trad==0?YT("¿¿"):YT("¿¿"));
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),temp);
+				y_ui_show_tip(YT("¿¿¿¿%s"),temp);
 			return 1;
 		}
 	}
@@ -1679,7 +1743,7 @@ static void word_to_ch_select(const char *s)
 		int len=l_char_to_gb(temp[i],str);
 		l_ptr_array_append(arr,l_memdup0(str,len));
 	}
-	y_select_set(arr,YT("ï¿½Ô´Ê¶ï¿½ï¿½Ö£ï¿½"));
+	y_select_set(arr,YT("¿¿¿¿¿"));
 	y_ui_input_draw();
 	YONG_SHOW_SELECT();
 }
@@ -2042,7 +2106,7 @@ IMR_TEST:
 				}
 				else
 				{
-					// ï¿½Ú¿ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½ï¿½ï¿½ï¿½Ô­ï¿½ï¿½ï¿½Ç±ï¿½ï¿½ï¿½Ô­ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ±ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½È½Ïºï¿½
+					// ¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿¿
 					if(eim->StringGet[0] || eim->CandWordCount)
 						ret=IMR_DISPLAY;
 					else
@@ -2151,7 +2215,7 @@ IMR_TEST:
 					return 1;
 				}
 				t=s2t_conv(&eim->CandTable[eim->SelectIndex][0]);
-				t2=strstr(t,"ï¿½ï¿½");
+				t2=strstr(t,"¿");
 				if(t2)
 				{
 					int i;
@@ -2177,7 +2241,7 @@ IMR_TEST:
 			{
 				const char *t,*t2;
 				t=s2t_conv(&eim->CandTable[eim->SelectIndex][0]);
-				t2=strstr(t,"ï¿½ï¿½");
+				t2=strstr(t,"¿");
 				if(t2)
 				{
 					int i;
@@ -2495,13 +2559,16 @@ void YongReloadAll(void)
 	YongUpdateMain(0);
 	/* redo it for something new from config file */
 	YongResetIM();
+	
+	/* Update status file after reload */
+	update_status_from_current();
 }
 
 void YongReloadAllTip(void)
 {
 	YongReloadAll();
 	if(tip_main)
-		y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë·¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½"));
+		y_ui_show_tip(YT("¿¿¿¿¿¿¿¿¿"));
 }
 
 void YongDestroyIM(void)
@@ -2521,6 +2588,9 @@ void YongDestroyIM(void)
 	key_tools=NULL;
 #endif
 	y_im_async_wait(1000);
+	
+	/* Delete status file on exit */
+	delete_status_file();
 }
 
 #ifdef __WIN32
@@ -2861,6 +2931,9 @@ int main(int arc,char *arg[])
 	if(y_im_get_config_int("IM","enable"))
 		y_xim_enable(1);
 
+	/* Initialize status file with default state (English, half-width) */
+	update_status_file("¿¿", CORNER_HALF);
+
 	//fprintf(stderr,"load in %.2f seconds\n",((double)(clock()-start))/(double)CLOCKS_PER_SEC);
 	VERBOSE("init done\n");
 
@@ -2891,6 +2964,10 @@ int y_main_init(int index)
 		im.Index=y_im_get_config_int("IM","default");
 	y_im_async_init();
 	update_im();
+	
+	/* Initialize status file with default state (English, half-width) */
+	update_status_file("¿¿", CORNER_HALF);
+	
 	return 0;
 }
 
@@ -2912,4 +2989,3 @@ void y_main_clean(void)
 }
 
 #endif
-

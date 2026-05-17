@@ -5,16 +5,18 @@
 #include "im.h"
 
 typedef struct{
-	int x,y;
+    int x,y;
 }UI_POINT;
 
 typedef struct{
-	int w,h;
+    int w,h;
 }UI_SIZE;
 
 typedef struct{
-	UI_POINT;
-	UI_SIZE;
+    int x;
+    int y;
+    int w;
+    int h;
 }UI_RECT;
 
 typedef union{

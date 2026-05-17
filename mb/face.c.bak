@@ -2315,7 +2315,7 @@ static uint8_t PinyinStep[MAX_CODE_LEN];	// 拼音切分的长度
 uint8_t PySwitch;							// 拼音是否经过手工切分
 
 typedef struct {
-	CSET_GROUP_BASE;
+	CSET_GROUP;
 	int mark;								// 间接辅助码结果中Extra的开始位置
 	char pinyin[16];						// 额外候选的拼音
 	char codetip[16];						// 字的编码提示

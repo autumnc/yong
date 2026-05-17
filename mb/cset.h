@@ -15,31 +15,34 @@ enum{
 };
 #define CSET_TYPE_ALL	CSET_TYPE_NONE
 
+#define CSET_GROUP_BASE \
+    struct _cset_group *next; \
+    int type; \
+    int count; \
+    int offset; \
+    int (*get)(struct _cset_group *g,int at,int num,char cand[][MAX_CAND_LEN+1],char tip[][MAX_TIPS_LEN+1]); \
+    void (*free)(struct _cset_group *g)
+
 typedef struct _cset_group{
-	struct _cset_group *next;
-	int type;
-	int count;
-	int offset;
-	int (*get)(struct _cset_group *g,int at,int num,char cand[][MAX_CAND_LEN+1],char tip[][MAX_TIPS_LEN+1]);
-	void (*free)(struct _cset_group *g);
+    CSET_GROUP_BASE;
 }CSET_GROUP;
 
 typedef struct _cset_group_calc{
-	CSET_GROUP;
-	int size;
-	char (*phrase)[MAX_CAND_LEN+1];
+    CSET_GROUP_BASE;
+    int size;
+    char (*phrase)[MAX_CAND_LEN+1];
 }CSET_GROUP_CALC;
 
 typedef struct _cset_group_predict{
-	CSET_GROUP;
-	int ptype;
-	char phrase[MAX_CAND_LEN+1];
-	char codetip[MAX_CODE_LEN+1];
+    CSET_GROUP_BASE;
+    int ptype;
+    char phrase[MAX_CAND_LEN+1];
+    char codetip[MAX_CODE_LEN+1];
 }CSET_GROUP_PREDICT;
 
 typedef struct _cset_group_mb{
-	CSET_GROUP;
-	struct y_mb *mb;
+    CSET_GROUP_BASE;
+    struct y_mb *mb;
 }CSET_GROUP_MB;
 
 typedef struct{
@@ -49,7 +52,7 @@ typedef struct{
 }CSET_GROUP_ARRAY_ITEM;
 
 typedef struct _cset_group_array{
-	CSET_GROUP;
+	CSET_GROUP_BASE;
 	LArray *array;
 }CSET_GROUP_ARRAY;
 

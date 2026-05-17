@@ -1151,7 +1151,6 @@ int YongSwitchIM(int id)
 	}
 	update_tray_icon();
 	YongUpdateMain(0);
-	y_xim_put_connect(y_xim_get_connect());
 	return 0;
 }
 
@@ -1313,7 +1312,7 @@ void YongShowMain(int show)
 			if(id && tip_main)
 			{
 				CaretUpdate=false;
-				y_ui_timer_add(100,ShowLangTipLater,id->lang==0?YT("ï¿½ï¿½ï¿½ï¿½"):YT("Ó¢ï¿½ï¿½"));
+				y_ui_timer_add(100,ShowLangTipLater,id->lang==0?YT("ÖĞÎÄ"):YT("Ó¢ÎÄ"));
 			}
 		}
 #ifndef CFG_NO_KEYBOARD
@@ -1457,8 +1456,8 @@ int YongHotKey(int key)
 #ifdef _WIN32
 		if(MainNoShow && tip_main)
 		{
-			if(id->state) y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½ï¿½ë·¨"));
-			else y_ui_show_tip(YT("ï¿½Ø±ï¿½ï¿½ï¿½ï¿½ë·¨"));
+			if(id->state) y_ui_show_tip(YT("´ò¿ªÊäÈë·¨"));
+			else y_ui_show_tip(YT("¹Ø±ÕÊäÈë·¨"));
 		}
 #endif
 		return 1;
@@ -1470,7 +1469,7 @@ int YongHotKey(int key)
 			int prev=id->lang;
 			YongSetLang(!id->lang);
 			if(prev!=id->lang && tip_main)
-				y_ui_show_tip(YT("ï¿½Ğ»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->lang==LANG_CN?YT("ï¿½ï¿½ï¿½ï¿½"):YT("Ó¢ï¿½ï¿½")));
+				y_ui_show_tip(YT("ÇĞ»»µ½£º%s"),(id->lang==LANG_CN?YT("ÖĞÎÄ"):YT("Ó¢ÎÄ")));
 			return 1;
 		}
 	}
@@ -1480,7 +1479,7 @@ int YongHotKey(int key)
 		{
 			YongSetCorner(!id->corner);
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ğ»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->corner==CORNER_FULL?YT("È«ï¿½ï¿½"):YT("ï¿½ï¿½ï¿½")));
+				y_ui_show_tip(YT("ÇĞ»»µ½£º%s"),(id->corner==CORNER_FULL?YT("È«½Ç"):YT("°ë½Ç")));
 			return 1;
 		}
 	}
@@ -1490,7 +1489,7 @@ int YongHotKey(int key)
 		{
 			YongSetBiaodian(!id->biaodian);
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ğ»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),(id->biaodian==LANG_CN?YT("ï¿½ï¿½ï¿½Ä±ï¿½ï¿½"):YT("Ó¢ï¿½Ä±ï¿½ï¿½")));
+				y_ui_show_tip(YT("ÇĞ»»µ½£º%s"),(id->biaodian==LANG_CN?YT("ÖĞÎÄ±êµã"):YT("Ó¢ÎÄ±êµã")));
 			return 1;
 		}
 	}
@@ -1500,9 +1499,9 @@ int YongHotKey(int key)
 		{
 			const char *temp;
 			YongSetTrad(!id->trad);
-			temp=(id->trad==0?YT("ï¿½ï¿½ï¿½ï¿½"):YT("ï¿½ï¿½ï¿½ï¿½"));
+			temp=(id->trad==0?YT("¼òÌå"):YT("·±Ìå"));
 			if(tip_main)
-				y_ui_show_tip(YT("ï¿½Ğ»ï¿½ï¿½ï¿½ï¿½ï¿½%s"),temp);
+				y_ui_show_tip(YT("ÇĞ»»µ½£º%s"),temp);
 			return 1;
 		}
 	}
@@ -1679,7 +1678,7 @@ static void word_to_ch_select(const char *s)
 		int len=l_char_to_gb(temp[i],str);
 		l_ptr_array_append(arr,l_memdup0(str,len));
 	}
-	y_select_set(arr,YT("ï¿½Ô´Ê¶ï¿½ï¿½Ö£ï¿½"));
+	y_select_set(arr,YT("ÒÔ´Ê¶¨×Ö£º"));
 	y_ui_input_draw();
 	YONG_SHOW_SELECT();
 }
@@ -2042,7 +2041,7 @@ IMR_TEST:
 				}
 				else
 				{
-					// ï¿½Ú¿ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½ï¿½ï¿½ï¿½Ô­ï¿½ï¿½ï¿½Ç±ï¿½ï¿½ï¿½Ô­ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ±ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½È½Ïºï¿½
+					// ÔÚ¿ÕÂëÊ±°´ÏÂÑ¡Ôñ¼ü£¬Ô­À´ÊÇ±£ÁôÔ­ÑùÏÔÊ¾£¬µ«»¹ÊÇÇå¿Õ±àÂëµÈ×´Ì¬±È½ÏºÃ
 					if(eim->StringGet[0] || eim->CandWordCount)
 						ret=IMR_DISPLAY;
 					else
@@ -2151,7 +2150,7 @@ IMR_TEST:
 					return 1;
 				}
 				t=s2t_conv(&eim->CandTable[eim->SelectIndex][0]);
-				t2=strstr(t,"ï¿½ï¿½");
+				t2=strstr(t,"£¬");
 				if(t2)
 				{
 					int i;
@@ -2177,7 +2176,7 @@ IMR_TEST:
 			{
 				const char *t,*t2;
 				t=s2t_conv(&eim->CandTable[eim->SelectIndex][0]);
-				t2=strstr(t,"ï¿½ï¿½");
+				t2=strstr(t,"£¬");
 				if(t2)
 				{
 					int i;
@@ -2501,7 +2500,7 @@ void YongReloadAllTip(void)
 {
 	YongReloadAll();
 	if(tip_main)
-		y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë·¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½"));
+		y_ui_show_tip(YT("ÖØÔØÊäÈë·¨ÅäÖÃÍê³É"));
 }
 
 void YongDestroyIM(void)

@@ -1,0 +1,128 @@
+--- a/main.c
++++ b/main.c
+@@ -102,6 +102,45 @@
+ 
+ static uint16_t assoc_hide;
+ 
++/* Status file path */
++#define STATUS_FILE "/tmp/yong_status"
++
++/* Status file update function */
++static void update_status_file(const char *lang, int corner)
++{
++    FILE *fp = fopen(STATUS_FILE, "w");
++    if (!fp)
++        return;
++    
++    /* Write language status */
++    if (lang && strcmp(lang, "英文") == 0)
++        fprintf(fp, "英文");
++    else if (lang && strcmp(lang, "中文") == 0)
++        fprintf(fp, "中文");
++    else
++        fprintf(fp, "英文");
++    
++    /* Write corner status */
++    if (corner == CORNER_FULL)
++        fprintf(fp, "●");
++    else
++        fprintf(fp, "◑");
++    
++    fclose(fp);
++}
++
++/* Delete status file */
++static void delete_status_file(void)
++{
++    unlink(STATUS_FILE);
++}
++
++/* Update status from current state */
++static void update_status_from_current(void)
++{
++    update_status_file("英文", CORNER_HALF);
++}
++
+ EXTRA_IM *YongCurrentIM(void)
+ {
+ 	if(im.BihuaMode)
+@@ -235,6 +274,9 @@
+ 	y_xim_put_connect(id);
+ 	YongUpdateMain(id);
+ 	YongResetIM();
++	
++	/* Update status file after language change */
++	update_status_from_current();
+ }
+ 
+ void YongSetCorner(int corner)
+@@ -247,6 +289,9 @@
+ 	y_xim_put_connect(id);
+ 	YongUpdateMain(id);
+ 	YongResetIM();
++	
++	/* Update status file after corner change */
++	update_status_from_current();
+ }
+ 
+ void YongSetBiaodian(int biaodian)
+@@ -1004,6 +1049,9 @@
+ 	update_tray_icon();
+ 	YongUpdateMain(0);
+ 	
++	/* Update status file after IM switch */
++	update_status_from_current();
++	
+ 	return 0;
+ }
+ 
+@@ -1249,6 +1297,9 @@
+ 					y_ui_show_tip(YT("关闭输入法"));
+ 		}
+ #endif
++		/* Update status file after trigger state change */
++		update_status_from_current();
++		
+ 		return 1;
+ 	}
+ 	else if(key==key_cnen[0] || key==key_cnen[1])
+@@ -2747,6 +2798,9 @@
+ 	YongUpdateMain(0);
+ 	/* redo it for something new from config file */
+ 	YongResetIM();
++	
++	/* Update status file after reload */
++	update_status_from_current();
+ }
+ 
+ void YongReloadAllTip(void)
+@@ -2773,6 +2827,9 @@
+ 	key_tools=NULL;
+ #endif
+ 	y_im_async_wait(1000);
++	
++	/* Delete status file on exit */
++	delete_status_file();
+ }
+ 
+ #ifdef __WIN32
+@@ -2958,6 +3015,9 @@
+ 	if(y_im_get_config_int("IM","enable"))
+ 		y_xim_enable(1);
+ 
++	/* Initialize status file with default state (English, half-width) */
++	update_status_file("英文", CORNER_HALF);
++
+ 	//fprintf(stderr,"load in %.2f seconds\n",((double)(clock()-start))/(double)CLOCKS_PER_SEC);
+ 	VERBOSE("init done\n");
+ 
+@@ -2985,6 +3045,9 @@
+ 	y_im_async_init();
+ 	update_im();
+ 	
++	/* Initialize status file with default state (English, half-width) */
++	update_status_file("英文", CORNER_HALF);
++	
+ 	return 0;
+ }
+ 

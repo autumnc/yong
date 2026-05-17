@@ -1,0 +1,1284 @@
+/* The PID of a window owner is stored in the X property _NET_WM_PID */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "llib.h"
+
+#include "xim.h"
+#include "ybus.h"
+#include "im.h"
+#include "common.h"
+#include "translate.h"
+
+#ifndef _WIN32
+#include <dirent.h>
+#endif
+
+static YBUS_PLUGIN *plugin_list;
+static YBUS_CONNECT *conn_list;
+static YBUS_CONNECT *conn_active;
+static int onspot;
+static int def_lang;
+static int64_t last_recycle;
+
+static YBUS_CONNECT *conn_wm;
+typedef struct{
+	int valid;
+	int x,y;
+}WM_FOCUS;
+static WM_FOCUS wm_focus;
+static char *wm_icon[2];
+// 更新角标状态
+static void ybus_update_corner(int corner)
+{
+    YBUS_CONNECT *conn = conn_active;
+    if (conn) {
+        conn->corner = corner;
+    }
+    // 同时更新 xim_ybus_id
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->corner = corner;
+    }
+}
+
+// 更新繁简状态
+static void ybus_update_trad(int trad)
+{
+    YBUS_CONNECT *conn = conn_active;
+    if (conn) {
+        conn->trad = trad;
+    }
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->trad = trad;
+    }
+}
+
+// 更新标点状态
+static void ybus_update_biaodian(int biaodian)
+{
+    YBUS_CONNECT *conn = conn_active;
+    if (conn) {
+        conn->biaodian = biaodian;
+    }
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->biaodian = biaodian;
+    }
+}
+
+int ybus_init(void)
+{
+	return 0;
+}
+
+void ybus_destroy(void)
+{
+	while(conn_list)
+		ybus_free_connect(conn_list);
+	conn_active=NULL;
+	
+	l_free(wm_icon[0]);
+	wm_icon[0]=NULL;
+	l_free(wm_icon[1]);
+	wm_icon[1]=NULL;
+}
+
+void ybus_add_plugin(YBUS_PLUGIN *plugin)
+{
+	plugin_list=(YBUS_PLUGIN*)l_slist_prepend((LSList*)plugin_list,(LSList*)plugin);
+}
+
+int ybus_init_plugins(void)
+{
+	YBUS_PLUGIN *p,*n;
+	int trigger;
+		
+	trigger=y_im_get_key("trigger",-1,CTRL_SPACE);
+	onspot=y_im_get_config_int("IM","onspot");
+	def_lang=y_im_get_config_int("IM","lang");
+	for(p=plugin_list;p!=NULL;p=n)
+	{
+		n=p->next;
+		p->config(0,0,"trigger",trigger);
+		p->config(0,0,"onspot",onspot);
+		if(0!=p->init())
+		{
+			plugin_list=l_slist_remove(plugin_list,p);
+			//return -1;
+		}
+	}
+	if(l_slist_length(plugin_list)==0)
+		return -1;
+	return 0;
+}
+
+int64_t ybus_now(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv,NULL);
+	return tv.tv_sec*1000+tv.tv_usec/1000;
+}
+
+static void xim_ybus_update_config(void)
+{
+	YBUS_PLUGIN *p,*n;
+	onspot=y_im_get_config_int("IM","onspot");
+	def_lang=y_im_get_config_int("IM","lang");
+	for(p=plugin_list;p!=NULL;p=n)
+	{
+		n=p->next;
+		p->config(0,0,"onspot",onspot);
+	}
+}
+
+YBUS_CONNECT *ybus_find_connect(YBUS_PLUGIN *plugin,CONN_ID conn_id)
+{
+	YBUS_CONNECT *p;
+	if(conn_active)
+	{
+		if(plugin->match_connect)
+		{
+			if(plugin->match_connect(conn_id,conn_active->id))
+				return conn_active;
+		}
+		else
+		{
+			if(conn_id==conn_active->id)
+				return conn_active;
+		}
+	}
+	for(p=conn_list;p!=NULL;p=p->next)
+	{
+		if(p->plugin!=plugin)
+			continue;
+		if(plugin->match_connect)
+		{
+			if(plugin->match_connect(conn_id,p->id))
+				return p;
+		}
+		else
+		{
+			if(conn_id==p->id)
+				return p;
+		}
+	}
+	return NULL;
+}
+
+static void ybus_recycle_connect(int64_t now);
+
+YBUS_CONNECT *ybus_add_connect(YBUS_PLUGIN *plugin,CONN_ID conn_id)
+{
+	YBUS_CONNECT *conn;
+	int64_t now=ybus_now();
+	conn=ybus_find_connect(plugin,conn_id);
+	if(conn) return conn;
+	conn=l_new0(YBUS_CONNECT);
+	conn->plugin=plugin;
+	if(plugin->copy_connect_id)
+		conn->id=plugin->copy_connect_id(conn_id);
+	else
+		conn->id=conn_id;
+	conn->lang=LANG_CN;
+	conn->biaodian=im.Biaodian;
+	conn->corner=CORNER_HALF;
+	conn->trad=im.TradDef;
+	conn->alive=now;
+	conn_list=l_slist_prepend(conn_list,conn);
+	if(plugin->getpid)
+	{
+		conn->pid=plugin->getpid(conn_id);
+		if(conn->pid>0)
+		{
+			conn->app=y_im_get_app_config_by_pid(conn->pid);
+			if(conn->app!=NULL)
+			{
+				const char *t=l_key_file_get_data(conn->app,"IM","onspot");
+				if(t)
+				{
+					conn->onspot=2|atoi(t);
+				}
+			}
+		}
+	}
+	else if(plugin->get_appid)
+	{
+		const char *app=plugin->get_appid(conn_id);
+		if(app!=NULL && app[0])
+		{
+			conn->app=y_im_get_app_config(app);
+			if(conn->app)
+			{
+				const char *t=l_key_file_get_data(conn->app,"IM","onspot");
+				if(t)
+				{
+					conn->onspot=2|atoi(t);
+				}
+			}
+		}
+	}
+	
+	ybus_recycle_connect(now);
+	return conn;
+}
+
+void ybus_free_connect(YBUS_CONNECT *conn)
+{
+	YBUS_PLUGIN *plugin;
+	if(!conn) return;
+	if(conn==conn_wm)
+	{
+		conn_wm=NULL;
+	}
+	plugin=conn->plugin;
+	if(conn_active==conn)
+	{
+		YongShowInput(0);
+		YongShowMain(0);
+		YongResetIM();
+		conn_active=NULL;
+	}
+	while(conn->client!=NULL)
+	{
+		ybus_free_client(conn,(YBUS_CLIENT*)conn->client);
+	}
+	if(plugin->free_connect_id)
+		plugin->free_connect_id(conn->id);
+	conn_list=l_slist_remove(conn_list,(YBUS_CONNECT*)conn);
+	l_free(conn);
+}
+
+YBUS_CLIENT *ybus_find_client(YBUS_CONNECT *conn,CLIENT_ID client_id)
+{
+	if(!conn)
+		return NULL;
+	YBUS_PLUGIN *plugin=conn->plugin;
+	YBUS_CLIENT *p;
+	if(conn->active)
+	{
+		if(plugin->match_client)
+		{
+			if(plugin->match_client(client_id,conn->active->id))
+				return conn->active;
+		}
+		else
+		{
+			if(conn->active->id==client_id)
+				return conn->active;
+		}
+	}
+	for(p=(YBUS_CLIENT*)conn->client;p!=NULL;p=p->next)
+	{
+		if(plugin->match_client)
+		{
+			if(plugin->match_client(client_id,p->id))
+				return p;
+		}
+		else
+		{
+			if(client_id==p->id)
+				return p;
+		}
+	}
+	return NULL;
+}
+
+YBUS_CLIENT *ybus_add_client(YBUS_CONNECT *conn,CLIENT_ID client_id,size_t child)
+{
+	YBUS_PLUGIN *plugin=conn->plugin;
+	YBUS_CLIENT *client;
+	conn->alive=ybus_now();
+	client=ybus_find_client(conn,client_id);
+	if(client) return client;
+	client=l_alloc0(sizeof(YBUS_CLIENT)+child);
+	if(plugin->copy_client_id)
+		client->id=plugin->copy_client_id(client_id);
+	else
+		client->id=client_id;
+	client->x=POSITION_ORIG;
+	client->y=POSITION_ORIG;
+	conn->client=l_slist_prepend(conn->client,client);
+	return client;
+}
+
+void ybus_free_client(YBUS_CONNECT *conn,YBUS_CLIENT *client)
+{
+	YBUS_PLUGIN *plugin=conn->plugin;
+	if(!conn || !client)
+		return;
+	if(conn==conn_active && client==conn->active)
+	{
+		YongShowInput(0);
+		YongShowMain(0);
+		YongResetIM();
+	}
+	conn->client=l_slist_remove(conn->client,client);
+	if(plugin->free_client_id)
+		plugin->free_client_id(client->id);
+	l_free(client);
+	if(client==conn->active)
+		conn->active=NULL;
+}
+
+int ybus_get_active(YBUS_CONNECT **conn,YBUS_CLIENT **client)
+{
+	if(!conn_active) return -1;
+	if(conn) *conn=conn_active;
+	if(!conn_active->active) return -1;
+	if(client) *client=conn_active->active;
+	return 0;
+}
+
+void *ybus_get_priv(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;	
+	conn=ybus_find_connect(plugin,conn_id);
+	if(!conn) return 0;
+	client=ybus_find_client(conn,client_id);
+	if(!client) return 0;
+	return client->priv;
+}
+
+static void wm_notify_state(void *param)
+{
+	if(!conn_wm)
+		return;
+	YBUS_CONNECT *conn;
+	int state=0;
+	int ret=ybus_get_active(&conn,NULL);
+	if(ret==0)
+		state=conn->state;
+	conn_wm->plugin->wm_state(conn_wm->id,state);
+	if(wm_icon[0])
+		conn_wm->plugin->wm_icon(conn_wm->id,wm_icon[0],wm_icon[1]?wm_icon[1]:wm_icon[0]);
+}
+
+int ybus_on_open(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	
+	conn=ybus_find_connect(plugin,conn_id);
+	if(!conn)
+	{
+		return -1;
+	}
+	conn->state=1;
+	client=ybus_find_client(conn,client_id);
+	if(!client)
+	{
+		return -2;
+	}
+	client->state=1;
+	YongResetIM();
+	int lang=def_lang;
+	if(conn->app!=NULL)
+	{
+		const char *t=l_key_file_get_data(conn->app,"IM","lang");
+		if(t!=NULL)
+			lang=atoi(t);
+	}
+	YongSetLang(lang);
+	if(conn_active==NULL)
+	{
+		conn_active=conn;
+	}
+	if(conn->active==NULL)
+	{
+		// gtk3 have a bug in dialog focus
+		conn->active=client;
+	}
+	if(conn==conn_active && client==conn->active)
+	{
+		YongShowInput(1);
+		YongShowMain(1);
+	}
+	wm_notify_state(NULL);	
+	return 0;
+}
+
+int ybus_on_close(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	conn=ybus_find_connect(plugin,conn_id);
+	if(!conn)
+	{
+		return 0;
+	}
+	conn->state=0;
+	client=ybus_find_client(conn,client_id);
+	if(!client)
+	{
+		return 0;
+	}
+	client->state=0;
+	if(conn==conn_active)
+	{
+		YongShowInput(0);
+		YongShowMain(0);
+		YongResetIM();
+	}
+	wm_notify_state(NULL);
+	return 0;
+}
+
+int ybus_on_focus_in(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	time_t now;
+	
+	conn=ybus_find_connect(plugin,conn_id);
+	// fprintf(stderr,"focus in %s:%p:%p\n",plugin->name,conn,(void*)client_id);
+	if(!conn)
+	{
+		return 0;
+	}
+	if(conn!=conn_active)
+		YongResetIM();
+	now=ybus_now();
+	conn->alive=now;
+	conn_active=conn;
+	conn->focus=1;
+	client=ybus_find_client(conn,client_id);
+	if(!client)
+	{
+		return 0;
+	}
+	conn->active=client;
+	if(!client->state && conn->state && plugin->open_im)
+	{
+		plugin->open_im(conn_id,client_id);
+	}
+	YongShowInput(conn->state);
+	YongShowMain(conn->state);
+	if(client->track)
+	{
+		int scale=(int)y_ui_get_scale(1);
+		YongMoveInput(client->x/scale,client->y/scale);
+	}
+	ybus_recycle_connect(now);
+	wm_notify_state(NULL);
+	
+	return 0;
+}
+
+int ybus_on_focus_out(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	
+	conn=ybus_find_connect(plugin,conn_id);
+	// printf("focus out %s:%p:%p\n",plugin->name,conn,(void*)client_id);
+	if(!conn)
+		return 0;
+	if(conn_active!=conn)
+		return 0;
+	client=ybus_find_client(conn,client_id);
+	if(!client) return 0;
+	if(client!=conn->active)
+		return 0;
+	y_xim_preedit_clear();
+	conn_active=NULL;
+	conn->focus=0;
+	conn->active=NULL;
+	YongShowInput(0);
+	YongShowMain(0);
+	wm_notify_state(NULL);
+	return 0;
+}
+
+int ybus_on_key(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id,int key)
+{
+	return y_im_input_key(key);
+}
+
+int ybus_on_cursor(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id,int x,int y,int rel)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client,*active=NULL;
+	conn=ybus_find_connect(plugin,conn_id);
+	if(!conn)
+		return -1;
+	client=ybus_find_client(conn,client_id);
+	if(!client)
+		return -1;
+	if(!rel)
+	{
+		client->track=1;
+		client->x=x;
+		client->y=y;
+		client->rel=0;
+	}
+	else
+	{
+		client->rel=1;
+		if(wm_focus.valid)
+		{
+			client->track=1;
+			client->x=x+wm_focus.x;
+			client->y=y+wm_focus.y;
+		}
+		else
+		{
+			client->track=0;
+		}
+	}
+	if(client->track)
+	{
+		ybus_get_active(NULL,&active);
+		if(active==client)
+		{
+			//fprintf(stderr,"move %d %d\n",client->x,client->y);
+			int scale=(int)y_ui_get_scale(1);
+			YongMoveInput(client->x/scale,client->y/scale);
+		}
+	}
+	return 0;
+}
+
+// 获取当前激活连接的标点状态
+static int ybus_get_biaodian(void)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	if (ybus_get_active(&conn, &client) == 0) {
+		return conn->biaodian;
+	}
+	return -1;
+}
+
+// 获取当前激活连接的角标状态
+static int ybus_get_corner(void)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	if (ybus_get_active(&conn, &client) == 0) {
+		return conn->corner;
+	}
+	return -1;
+}
+
+// 获取当前激活连接的繁简状态
+static int ybus_get_trad(void)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	if (ybus_get_active(&conn, &client) == 0) {
+		return conn->trad;
+	}
+	return -1;
+}
+
+// 获取当前激活连接的预编辑状态
+static int ybus_get_onspot(void)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	if (ybus_get_active(&conn, &client) == 0) {
+		return conn->onspot & 1;
+	}
+	return -1;
+}
+
+// 获取当前激活的输入法名称
+static char *ybus_get_im_name(void)
+{
+	YBUS_CONNECT *conn;
+	YBUS_CLIENT *client;
+	static char name[64];
+	
+	if (ybus_get_active(&conn, &client) != 0) {
+		return NULL;
+	}
+	
+	// 从 app 配置中获取输入法名称
+	if (conn->app) {
+		const char *im_idx = l_key_file_get_data(conn->app, "IM", "default");
+		if (im_idx) {
+			const char *im_name = l_key_file_get_data(conn->app, "IM", im_idx);
+			if (im_name) {
+				snprintf(name, sizeof(name), "%s", im_name);
+				return name;
+			}
+		}
+	}
+	
+	// 备用：从全局配置获取当前输入法
+	int idx = im.Index;
+	char key[16];
+	snprintf(key, sizeof(key), "%d", idx);
+	char *im_name = y_im_get_config_string("IM", key);
+	if (im_name) {
+		snprintf(name, sizeof(name), "%s", im_name);
+		l_free(im_name);
+		return name;
+	}
+	
+	return NULL;
+}
+
+int ybus_on_tool(YBUS_PLUGIN *plugin,CONN_ID conn_id,int type,int param)
+{
+	int res=0;
+	switch(type){
+	case YBUS_TOOL_SET_CORNER:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			conn->corner = param;
+			// 同步到全局
+			CONNECT_ID *id = xim_ybus_get_connect();
+			if (id) id->corner = param;
+			res = 1;
+		}
+		break;
+	}
+
+	case YBUS_TOOL_SET_TRAD:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			conn->trad = param;
+			CONNECT_ID *id = xim_ybus_get_connect();
+			if (id) id->trad = param;
+			res = 1;
+		}
+		break;
+	}
+
+	case YBUS_TOOL_SET_BIAODIAN:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			conn->biaodian = param;
+			CONNECT_ID *id = xim_ybus_get_connect();
+			if (id) id->biaodian = param;
+			// 同时更新全局 im 结构
+			im.Biaodian = param;
+			res = 1;
+	}
+	break;
+	}
+	case YBUS_TOOL_SET_LANG:
+	{
+		int ret;
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		// fprintf(stderr,"set lang %d\n",param);
+		if(param!=LANG_CN && param!=LANG_EN)
+			break;
+		ret=ybus_get_active(&conn,&client);
+		if(ret!=0) break;
+		if(conn->state==0) break;
+		if(conn->lang==param) break;
+		YongSetLang(param);
+		
+		// 修复：同步标点和角标状态
+		// 标点状态存储在 im.Biaodian 中
+		if (conn->biaodian != im.Biaodian) {
+			conn->biaodian = im.Biaodian;
+		}
+		// 角标状态：需要从 Yong 获取当前角标状态
+		// 假设有一个函数 YongGetCorner() 或从 im 结构中读取
+		// 这里从 xim_ybus_id 获取（通过 xim_ybus_get_connect）
+		CONNECT_ID *id = xim_ybus_get_connect();
+		if (id) {
+			if (conn->corner != id->corner) {
+				conn->corner = id->corner;
+			}
+			if (conn->trad != id->trad) {
+				conn->trad = id->trad;
+			}
+		}
+    
+		res=1;
+		// fprintf(stderr,"changed\n");
+		break;
+	}
+	case YBUS_TOOL_GET_LANG:
+	{
+		int ret;
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		ret=ybus_get_active(&conn,&client);
+		if(ret!=0) return -1;
+		if(conn->state==0) return -1;
+		res=conn->lang;
+		break;
+	}
+	case YBUS_TOOL_SET_WM:
+	{
+		YBUS_CONNECT *conn;
+		conn=ybus_find_connect(plugin,conn_id);
+		if(!conn)
+			break;
+		conn_wm=conn;
+		res=getpid();
+		y_ui_idle_add(wm_notify_state,NULL);
+		break;
+	}
+	case YBUS_TOOL_TRIGGER:
+	{
+		int ret;
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		ret=ybus_get_active(&conn,&client);
+		if(ret!=0) return -1;
+		if(param==-1){
+			param=!conn->state;
+		}
+		if(param==0)
+			ybus_on_close(plugin,conn->id,client->id);
+		else if(param==1)
+			ybus_on_open(plugin,conn->id,client->id);
+		res=conn->state;
+		break;
+	}
+	case YBUS_TOOL_CONFIG:
+	{
+		y_im_setup_config();
+		break;
+	}
+	case YBUS_TOOL_WM_FOCUS:
+	{
+		if(param==-1)
+		{
+			wm_focus.valid=0;
+			break;
+		}
+		int ox=wm_focus.x,oy=wm_focus.y;
+		wm_focus.y=(int)(int16_t)(param>>16&0xffff);
+		wm_focus.x=(int)(int16_t)(param&0xffff);
+		wm_focus.valid=1;
+		YBUS_CLIENT *client=NULL;
+		ybus_get_active(NULL,&client);
+		if(client!=NULL && client->track && client->rel)
+		{
+			client->x=client->x-ox+wm_focus.x;
+			client->y=client->y-oy+wm_focus.y;
+			YongMoveInput(client->x,client->y);
+		}
+		break;
+	}
+	case YBUS_TOOL_RELOAD_ALL:
+	{
+		YongReloadAll();
+		break;
+	}
+	case YBUS_TOOL_KEYBOARD:
+	{
+		y_kbd_select(param,0);
+		break;
+	}
+	case YBUS_TOOL_EXIT:
+	{
+		y_ui_quit();
+		break;
+	}
+	case YBUS_TOOL_STATUS_POS:
+	{
+		int x=0,y=0;
+		y_ui_cfg_ctrl("status_pos",&x,&y);
+		res=(x<<16)|y;
+		break;
+	}
+	case YBUS_TOOL_IMKEY:
+	{
+		res=y_im_input_key(param);
+		break;
+	}
+	case YBUS_TOOL_GET_INDEX:
+	{
+		res=im.Index;
+		break;
+	}
+	// 新增：获取标点状态
+	case YBUS_TOOL_GET_BIAODIAN:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			res = conn->biaodian;
+		} else {
+			res = -1;
+		}
+		break;
+	}
+	// 新增：获取角标状态
+	case YBUS_TOOL_GET_CORNER:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			// 直接从 conn_active 获取
+			res = conn->corner;
+		} else {
+			res = -1;
+		}
+		break;
+	}
+	// 新增：获取繁简状态
+	case YBUS_TOOL_GET_TRAD:
+	{
+		YBUS_CONNECT *conn;
+		YBUS_CLIENT *client;
+		if (ybus_get_active(&conn, &client) == 0) {
+			res = conn->trad;
+		} else {
+			res = -1;
+		}
+		break;
+	}
+	// 新增：获取预编辑状态
+	case YBUS_TOOL_GET_ONSPOT:
+	{
+		res = ybus_get_onspot();
+		break;
+	}
+	// 新增：获取输入法名称
+	case YBUS_TOOL_GET_IM_NAME:
+	{
+		char *name = ybus_get_im_name();
+		if (name) {
+			// 返回字符串指针（调用者需要注意）
+			res = (int)(intptr_t)name;
+		} else {
+			res = -1;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	return res;
+}
+
+YBUS_CONNECT *ybus_wm_ready(void)
+{
+	return conn_wm;
+}
+
+void ybus_wm_icon(const char *icon1,const char *icon2)
+{
+	l_free(wm_icon[0]);
+	wm_icon[0]=l_path_resolve(icon1);
+	l_free(wm_icon[1]);
+	wm_icon[1]=l_path_resolve(icon2);
+	if(!conn_wm)
+		return;
+	if(!wm_icon[0])
+		return;
+	conn_wm->plugin->wm_icon(conn_wm->id,wm_icon[0],wm_icon[1]?wm_icon[1]:wm_icon[0]);
+}
+
+static int process_compare(const int *v1,const int *v2)
+{
+	return *v1-*v2;
+}
+
+#ifdef _WIN32
+static int get_process_list(int list[],int max)
+{
+	BOOL ret;
+	DWORD bytes;
+	int count;
+	ret=EnumProcess((DWORD*)list,max*sizeof(int),&bytes);
+	if(!ret) return 0;
+	count=(int)bytes/sizeof(DWORD);
+	qsort(list,count,sizeof(int),(LCmpFunc)process_compare);
+	return count;
+}
+#else
+
+static int process_filter(const struct dirent *d)
+{
+	const char *p;
+	size_t len;
+	if(!(d->d_type & DT_DIR))
+		return 0;
+	p=d->d_name;
+	len=strspn(p,"0123456789");
+	if(p[len]!=0)
+		return 0;
+	return 1;
+}
+
+static int get_process_list(int list[],int max)
+{
+	struct dirent **namelist;
+	int count,i,n;
+	n=scandir("/proc",&namelist,process_filter,NULL);
+	if(n<0) return 0;
+	count=MIN(n,max);
+	for(i=0;i<n;i++)
+	{
+		struct dirent *d=namelist[i];
+		if(i<max)
+			list[i]=atoi(d->d_name);
+		free(d);
+	}
+	free(namelist);
+	qsort(list,count,sizeof(int),(LCmpFunc)process_compare);
+	return count;
+}
+#endif
+
+static void ybus_recycle_connect(int64_t now)
+{
+	int list[4096];
+	int count;
+	YBUS_CONNECT *p,*n;
+	
+	if(!(now>last_recycle+60000 || now<last_recycle))
+	{
+		return;
+	}
+	last_recycle=now;
+	count=get_process_list(list,L_ARRAY_SIZE(list));
+	if(count<=0 || count>=L_ARRAY_SIZE(list))
+		return;
+	for(p=conn_list;p!=NULL;p=n)
+	{
+		YBUS_PLUGIN *plugin=p->plugin;
+		n=p->next;
+		if(!plugin->getpid)
+			continue;
+		if(p->alive<now && p->alive+60000>now)
+			continue;
+		p->alive=now;
+		if(p->pid==0)
+		{
+			if(plugin->getpid)
+			{
+				p->pid=plugin->getpid(p->id);
+				if(p->pid==0)
+					continue;
+			}
+		}
+		if(bsearch(&p->pid,list,count,sizeof(int),(LCmpFunc)process_compare))
+			continue;
+		ybus_free_connect(p);
+	}
+}
+
+static CONNECT_ID xim_ybus_id={
+	.x=POSITION_ORIG,
+	.y=POSITION_ORIG
+};
+
+int xim_ybus_init(void)
+{
+	ybus_init();
+	return ybus_init_plugins();
+}
+
+void xim_ybus_destroy(void)
+{
+	ybus_destroy();
+}
+
+void xim_ybus_enable(int enable)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return;
+	if(enable==conn->state)
+		return;
+	if(enable==-1)
+		enable=!conn->state;
+	plugin=conn->plugin;
+	if(enable)
+	{
+		if(!plugin->open_im)
+			return;
+		plugin->open_im(conn->id,conn->active->id);
+	}
+	else
+	{
+		if(!plugin->close_im)
+			return;
+		plugin->close_im(conn->id,conn->active->id);
+	}
+}
+
+int xim_ybus_trigger_key(int key)
+{
+	YBUS_PLUGIN *plugin;
+	
+	for(plugin=plugin_list;plugin;plugin=plugin->next)
+	{
+		if(!plugin->config) continue;
+		plugin->config(0,0,"trigger",key);
+	}
+	return 0;
+}
+
+CONNECT_ID *xim_ybus_get_connect(void)
+{
+	CONNECT_ID *id=&xim_ybus_id;
+	if(!conn_active || !conn_active->active)
+	{
+		return NULL;
+	}
+	id->state=conn_active->state;
+	id->lang=conn_active->lang;
+	id->track=conn_active->active->track;
+	id->biaodian=conn_active->biaodian;
+	id->trad=conn_active->trad;
+	id->focus=conn_active->focus;
+	id->corner=conn_active->corner;
+	id->onspot=conn_active->onspot;
+	return id;
+}
+
+void xim_ybus_put_connect(CONNECT_ID *id)
+{
+	if(id->dummy)
+	{
+		YBUS_CONNECT *p;
+		for(p=conn_list;p!=NULL;p=p->next)
+		{
+			p->corner=id->corner;
+			p->lang=id->lang;
+			p->biaodian=id->biaodian;
+			p->trad=id->trad;
+		}
+		return;
+	}
+	if(!conn_active)
+	{
+		return;
+	}
+	conn_active->corner=id->corner;
+	conn_active->lang=id->lang;
+	conn_active->biaodian=id->biaodian;
+	conn_active->trad=id->trad;
+}
+
+void xim_ybus_forward_key(int key,int repeat)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return;
+	plugin=conn->plugin;
+	if(!plugin->send_key)
+		return;
+	if(repeat<=0)
+		repeat=1;
+	plugin->send_key(conn->id,conn->active->id,key,repeat);
+}
+
+void xim_ybus_send_string(const char *s,int flags)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return;
+	plugin=conn->plugin;
+	plugin->send_string(conn->id,conn->active->id,s,flags);
+}
+
+int xim_ybus_preedit_clear(void)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return -1;
+	plugin=conn->plugin;
+	if(!plugin->preedit_clear)
+		return -1;
+	plugin->preedit_clear(conn->id,conn->active->id);
+	return 0;
+}
+
+int xim_ybus_preedit_draw(const char *s,int len)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return -1;
+	plugin=conn->plugin;
+	if(!plugin->preedit_draw)
+		return -1;
+	if(conn->onspot==2)
+		return -1;
+	if(!conn->onspot && !onspot)
+		return -1;
+	plugin->preedit_draw(conn->id,conn->active->id,s);
+	return 0;
+}
+
+static void upload_clipboard_cb(int code)
+{
+	if(code==0)
+		y_ui_show_tip(YT("上传成功"));
+	else
+		y_ui_show_tip(YT("上传失败"));
+}
+
+static void download_clipboard_cb(const char *text,void *user)
+{
+	(void)user;
+	if(text==NULL)
+	{
+		y_ui_show_tip(YT("下载失败"));
+		return;
+	}
+	if(!y_ui.set_select)
+	{
+		y_ui_show_tip("当前接口不支持剪贴板");
+		return;
+	}
+	y_ui.set_select(text);
+	y_ui_show_tip(YT("下载失败"));
+}
+
+static void xim_action(const char *s)
+{
+	if(!strcmp(s,"copyCloud"))
+	{
+		y_im_run_helper("yong-config --sync --upload-clipboard",NULL,NULL,upload_clipboard_cb);
+	}
+	else if(!strcmp(s,"pasteCloud"))
+	{
+		char *argv[]={"yong-config","--sync","--download-clipboard",NULL};
+		y_im_async_spawn(argv,download_clipboard_cb,NULL,false);
+		// y_im_run_helper("yong-config --sync --download-clipboard",NULL,NULL,download_clipboard_cb);
+	}
+	else if(!strcmp(s,"undo"))
+	{
+		y_xim_send_string("$BACKSPACE(LAST)");
+	}
+	else if(!strcmp(s,"redo"))
+	{
+		y_xim_send_keys("^Y");
+	}
+}
+
+static void xim_explore_url(const char *s)
+{
+	if(l_str_has_prefix(s,"action:"))
+	{
+		xim_action(s+7);
+		return;
+	}
+	if(y_im_is_url(s))
+	{
+		char *args[]={"xdg-open",(char*)s,0};
+		g_spawn_async(NULL,args,NULL,
+			G_SPAWN_SEARCH_PATH|G_SPAWN_STDOUT_TO_DEV_NULL,
+			0,0,0,0);
+	}
+	else
+	{
+		g_spawn_command_line_async(s,NULL);
+	}
+}
+
+static int xim_send_keys(const int *keys,int count)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return -1;
+	plugin=conn->plugin;
+	if(!plugin->send_keys)
+		return -1;
+	plugin->send_keys(conn->id,conn->active->id,keys,count);
+	return 0;
+}
+
+static int xim_get_onspot(void)
+{
+	YBUS_CONNECT *conn=conn_active;
+	YBUS_PLUGIN *plugin;
+	if(!conn || !conn->active)
+		return 0;
+	plugin=conn->plugin;
+	if(!plugin->preedit_draw)
+		return 0;
+	if(conn->onspot)
+		return conn->onspot&1;
+	return onspot;
+}
+
+int y_xim_init_default(Y_XIM *x)
+{
+	int ybus_xim_init(void);
+	int ybus_lcall_init(void);
+	int ybus_wayland_init(void);
+	int ybus_ibus_init(void);
+	
+	ybus_xim_init();
+	ybus_lcall_init();
+	ybus_ibus_init();
+	ybus_wayland_init();
+
+	x->init=xim_ybus_init;
+	x->destroy=xim_ybus_destroy;
+	x->enable=xim_ybus_enable;
+	x->forward_key=xim_ybus_forward_key;
+	x->trigger_key=xim_ybus_trigger_key;
+	x->send_string=xim_ybus_send_string;
+	x->preedit_clear=xim_ybus_preedit_clear;
+	x->preedit_draw=xim_ybus_preedit_draw;
+	x->get_connect=xim_ybus_get_connect;
+	x->put_connect=xim_ybus_put_connect;
+	x->update_config=xim_ybus_update_config;
+	x->explore_url=xim_explore_url;
+	x->send_keys=xim_send_keys;
+	x->get_onspot=xim_get_onspot;
+	x->name="ybus";
+	return 0;
+}
+
+void ybus_notify_corner_change(int corner)
+{
+    if (conn_active) {
+        conn_active->corner = corner;
+    }
+    // 同时更新 xim_ybus_id
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->corner = corner;
+    }
+}
+
+// 通知繁简变化
+void ybus_notify_trad_change(int trad)
+{
+    if (conn_active) {
+        conn_active->trad = trad;
+    }
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->trad = trad;
+    }
+}
+
+// 通知标点变化
+void ybus_notify_biaodian_change(int biaodian)
+{
+    if (conn_active) {
+        conn_active->biaodian = biaodian;
+    }
+    CONNECT_ID *id = xim_ybus_get_connect();
+    if (id) {
+        id->biaodian = biaodian;
+    }
+    // 同时更新全局 im 结构
+    im.Biaodian = biaodian;
+}
