@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <strings.h>
 
 #include <cairo.h>
 #include <linux/fb.h>
@@ -41,6 +42,46 @@ enum{
 	White
 };
 
+static const struct{
+	const char *name;
+	unsigned char index;
+} fbterm_color_names[]={
+	{"Black",0},{"DarkRed",1},{"DarkGreen",2},{"DarkYellow",3},
+	{"DarkBlue",4},{"DarkMagenta",5},{"DarkCyan",6},{"Gray",7},
+	{"DarkGray",8},{"Red",9},{"Green",10},{"Yellow",11},
+	{"Blue",12},{"Magenta",13},{"Cyan",14},{"White",15},
+	{NULL,0}
+};
+
+static int fbterm_rgb_to_256(int r,int g,int b)
+{
+	if(r==g && g==b)
+	{
+		if(r==0)   return 0;
+		if(r==255) return 15;
+		return 232+(r*23+127)/255;
+	}
+	int ri=(r*5+127)/255;
+	int gi=(g*5+127)/255;
+	int bi=(b*5+127)/255;
+	return 16+36*ri+6*gi+bi;
+}
+
+static unsigned char fbterm_color_parse(const char *s,unsigned char defval)
+{
+	int i,r,g,b,len;
+	if(!s || !s[0]) return defval;
+	for(i=0;fbterm_color_names[i].name;i++)
+		if(!strcasecmp(s,fbterm_color_names[i].name))
+			return fbterm_color_names[i].index;
+	len=strlen(s);
+	if(len==7 && l_sscanf(s,"#%02x%02x%02x",&r,&g,&b)==3)
+		return (unsigned char)fbterm_rgb_to_256(r,g,b);
+	if(len==4 && l_sscanf(s,"#%1x%1x%1x",&r,&g,&b)==3)
+		return (unsigned char)fbterm_rgb_to_256(r*17,g*17,b*17);
+	return defval;
+}
+
 #define MSG(a) ((Message *)(a))
 
 static int imfd;
@@ -52,6 +93,10 @@ static CONNECT_ID *CurrentID=&id;
 static int def_lang;
 
 static Info info;
+
+static LKeyFile *FbtermConfig;
+static unsigned char MainBg=White;
+static unsigned char MainText=Blue;
 
 static unsigned MainWin=1;
 static gint MainWin_X,MainWin_Y,MainWin_W,MainWin_H;
@@ -468,10 +513,8 @@ static void write_status_file(void)
 		}
 		/* Corner indicator */
 		fprintf(fp, "%s", CurrentID->corner == CORNER_FULL ? "\xa1\xf1" : "\xa1\xf0");
-	} else {
-		fprintf(fp, "\xd3\xa2\xce\xc4\xa1\xf0");
+		fprintf(fp, "\n");
 	}
-	fprintf(fp, "\n");
 	fclose(fp);
 }
 
@@ -672,15 +715,44 @@ static void input_expose(void)
 	}
 }
 
+static void fbterm_config_load(void)
+{
+	char path[1024];
+	const char *val;
+	sprintf(path,"%s/fbterm.ini",y_im_get_path("HOME"));
+	FbtermConfig=l_key_file_open(path,1,NULL);
+	if(!FbtermConfig) return;
+
+	if(!l_key_file_has_group(FbtermConfig,"input"))
+	{
+		l_key_file_set_string(FbtermConfig,"input","bg","White");
+		l_key_file_set_string(FbtermConfig,"input","text","Black");
+		l_key_file_set_string(FbtermConfig,"input","select","Blue");
+		l_key_file_set_string(FbtermConfig,"input","tips","Red");
+		l_key_file_set_string(FbtermConfig,"input","caret","Black");
+		l_key_file_set_string(FbtermConfig,"input","page","Black");
+		l_key_file_set_string(FbtermConfig,"main","bg","White");
+		l_key_file_set_string(FbtermConfig,"main","text","Blue");
+		l_key_file_save(FbtermConfig,path);
+	}
+
+	val=l_key_file_get_data(FbtermConfig,"main","bg");
+	MainBg=fbterm_color_parse(val,White);
+	val=l_key_file_get_data(FbtermConfig,"main","text");
+	MainText=fbterm_color_parse(val,Blue);
+}
+
 static int ui_fbterm_init(void)
 {
 	GIOChannel *chn;
 
 	loop=g_main_loop_new(NULL,0);
-	
+
 	pipe(im_pipe);
 	chn=g_io_channel_unix_new(im_pipe[0]);
 	g_io_add_watch(chn,G_IO_IN,im_pipe_cb,NULL);
+
+	fbterm_config_load();
 
 	return 0;
 }
@@ -731,12 +803,18 @@ static int ui_fbterm_input_update(UI_INPUT *param)
 	else
 		InputTheme.CandY=InputTheme.CodeY;
 	InputTheme.space=info.fontWidth/2;
-	InputTheme.bg_color=White;
-	InputTheme.text[0]=Black;
-	InputTheme.text[1]=Blue;
-	InputTheme.text[2]=Red;
-	InputTheme.text[3]=Black;
-	InputTheme.text[4]=Black;
+	InputTheme.bg_color=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","bg"),White);
+	InputTheme.text[0]=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","text"),Black);
+	InputTheme.text[1]=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","select"),Blue);
+	InputTheme.text[2]=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","tips"),Red);
+	InputTheme.text[3]=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","caret"),Black);
+	InputTheme.text[4]=fbterm_color_parse(
+		l_key_file_get_data(FbtermConfig,"input","page"),Black);
 
 	InputTheme.RealWidth=2*InputTheme.RealHeight;
 	InputTheme.MaxHeight=InputTheme.RealHeight;
@@ -1122,7 +1200,7 @@ static void main_expose(void)
 	if(!MainWin_W) return;
 	rc.x=0;rc.y=0;
 	rc.w=MainWin_W;rc.h=MainWin_H;
-	fill_rect_main(rc,White);
+	fill_rect_main(rc,MainBg);
 	for(i=0;i<UI_BTN_COUNT;i++)
 	{
 		int x=2,y=2,step=2*info.fontWidth;
@@ -1163,7 +1241,7 @@ static void main_expose(void)
 		}
 		//fprintf(stderr,"%d %s\n",i,text);
 		if(text[0])
-			draw_text_main(x,y,Blue,White,text);
+			draw_text_main(x,y,MainText,MainBg,text);
 	}	
 }
 
