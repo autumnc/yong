@@ -762,10 +762,8 @@ static void write_xism_status_file(CONNECT_ID *id)
 			fprintf(fp, "\xd3\xa2\xce\xc4");
 		}
 		fprintf(fp, "%s", id->corner == CORNER_FULL ? "\xa1\xf1" : "\xa1\xf0");
-	} else {
-		fprintf(fp, "\xd3\xa2\xce\xc4\xa1\xf0");
+		fprintf(fp, "\n");
 	}
-	fprintf(fp, "\n");
 	fclose(fp);
 }
 
@@ -820,7 +818,9 @@ void y_xim_preedit_draw(const char *s,int len)
 void y_xim_enable(int enable)
 {
 	if(xim.enable)
-		return xim.enable(enable);
+		xim.enable(enable);
+	if(!enable)
+		write_xism_status_file(NULL);
 }
 
 Y_UI y_ui;

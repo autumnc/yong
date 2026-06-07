@@ -398,6 +398,7 @@ int ybus_on_close(YBUS_PLUGIN *plugin,CONN_ID conn_id,CLIENT_ID client_id)
 		YongResetIM();
 	}
 	wm_notify_state(NULL);
+	y_xim_put_connect(y_xim_get_connect());
 	return 0;
 }
 
@@ -900,9 +901,9 @@ int xim_ybus_preedit_draw(const char *s,int len)
 static void upload_clipboard_cb(int code)
 {
 	if(code==0)
-		y_ui_show_tip(YT("ÉÏ´«³É¹¦"));
+		y_ui_show_tip(YT("ï¿½Ï´ï¿½ï¿½É¹ï¿½"));
 	else
-		y_ui_show_tip(YT("ÉÏ´«Ê§°Ü"));
+		y_ui_show_tip(YT("ï¿½Ï´ï¿½Ê§ï¿½ï¿½"));
 }
 
 static void download_clipboard_cb(const char *text,void *user)
@@ -910,16 +911,16 @@ static void download_clipboard_cb(const char *text,void *user)
 	(void)user;
 	if(text==NULL)
 	{
-		y_ui_show_tip(YT("ÏÂÔØÊ§°Ü"));
+		y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½"));
 		return;
 	}
 	if(!y_ui.set_select)
 	{
-		y_ui_show_tip("µ±Ç°½Ó¿Ú²»Ö§³Ö¼ôÌù°å");
+		y_ui_show_tip("ï¿½ï¿½Ç°ï¿½Ó¿Ú²ï¿½Ö§ï¿½Ö¼ï¿½ï¿½ï¿½ï¿½ï¿½");
 		return;
 	}
 	y_ui.set_select(text);
-	y_ui_show_tip(YT("ÏÂÔØÊ§°Ü"));
+	y_ui_show_tip(YT("ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½"));
 }
 
 static void xim_action(const char *s)
